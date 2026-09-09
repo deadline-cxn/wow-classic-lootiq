@@ -1,5 +1,7 @@
 # LootIQ — Know What You Loot
 
+NOTE: This addon is for wow classic era 1.15.9 only.
+
 Ever pick up an item and wonder:
 
 **Where did I get this?**
