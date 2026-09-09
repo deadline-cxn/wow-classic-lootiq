@@ -69,11 +69,12 @@ ns.ACCOUNT_DB_DEFAULTS = {
     -- it isn't. See baseline below for a running average instead.
     ahPrices = {},  -- [itemID] = { price = copper (per unit), scanTime = time() } from our own AH scans
     -- [itemID] = { link, sources = { [creatureID] = true },
-    -- fishingSources/miningSources/herbalismSources/craftingSources =
-    -- { [key] = true } } - reverse index of creatures.drops/skins/sells
-    -- plus each gathering/crafting activity's own data (see Loot.lua's
-    -- GATHERING_CATEGORIES; key is a zone name for the first three,
-    -- a profession name for crafting).
+    -- fishingSources/miningSources/herbalismSources/craftingSources/
+    -- disenchantingSources = { [key] = true } } - reverse index of
+    -- creatures.drops/skins/sells plus each gathering/crafting/disenchanting
+    -- activity's own data (see Loot.lua's GATHERING_CATEGORIES; key is a
+    -- zone name for the first three, a profession name for crafting, and a
+    -- disenchanted item's own ns.GetItemKey for disenchanting).
     items = {},
     -- A general running reference for "what does this item usually sell
     -- for", built from every completed AH scan (see AuctionScan.lua) -
@@ -114,6 +115,13 @@ ns.ACCOUNT_DB_DEFAULTS = {
     -- counter (like a creature's `kills`) - a single opening can drop 0, 1,
     -- or several items, so it can't be derived from summing the item list.
     chests = {},
+    -- [key] = { link, disenchants = n, materials = { [itemID] = { count,
+    -- occurrences, link } } } - materials received from disenchanting an
+    -- item, keyed by ns.GetItemKey of the DISENCHANTED item itself (not a
+    -- material) - see Loot.lua's SpellTargetItem hook/Disenchanting.lua.
+    -- `disenchants` is a real independent counter (like a chest's `opens`),
+    -- since one disenchant can yield 0, 1, or several material stacks.
+    disenchanting = {},
 }
 
 -- A random-suffix item ("Ogre Slaying Bracers of the Monkey" vs. "...of the

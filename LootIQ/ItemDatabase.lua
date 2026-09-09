@@ -56,6 +56,9 @@ local function GetListLabel(key)
     for _ in pairs(item.chestsSources or {}) do
         sourceCount = sourceCount + 1
     end
+    for _ in pairs(item.disenchantingSources or {}) do
+        sourceCount = sourceCount + 1
+    end
     return ("%s (%d source%s)"):format(GetDisplayName(key, item), sourceCount, sourceCount == 1 and "" or "s")
 end
 
@@ -144,6 +147,8 @@ _, _, ns.GoToItemDatabaseEntry = ns.BuildBrowserPanel("Item Database", {
             return nil, "Interface/Icons/Trade_BlackSmithing"
         elseif next(item.chestsSources or {}) then
             return nil, "Interface/Icons/INV_Box_01"
+        elseif next(item.disenchantingSources or {}) then
+            return nil, "Interface/Icons/INV_Enchant_Disenchant"
         end
         return nil
     end,

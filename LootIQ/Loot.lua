@@ -18,7 +18,7 @@ local ADDON_NAME, ns = ...
 -- killed target is used instead of re-checking "target" then.
 local killCounted = {}    -- guid -> true once its kill has been counted
 local currentLootGuid     -- guid of the loot window currently open, if any (cleared on LOOT_CLOSED)
-local currentLootIsContainer = false -- true while the open loot window came from a chest/crate, not a creature (cleared on LOOT_CLOSED)
+local currentLootIsContainer = false -- true while the open loot window came from a chest/crate or a disenchant, not a creature (cleared on LOOT_CLOSED)
 local lastDeadTarget = { guid = nil, creatureID = nil, name = nil, time = 0 }
 local FALLBACK_WINDOW = 5 -- seconds a cached dead target stays usable as a fallback
 local lastKnownMoney = GetMoney()
@@ -93,6 +93,40 @@ local function GetRecentlyOpenedContainerItem()
         return lastOpenedContainerItem.itemID, lastOpenedContainerItem.link
     end
     return nil, nil
+end
+
+-- Disenchant is cast by clicking its spellbook icon (which puts the cursor
+-- into "spell targeting" mode without starting a cast yet), then clicking a
+-- bag item to target it - that click is what calls SpellTargetItem(bag,
+-- slot), the real Blizzard API the default ContainerFrame uses internally
+-- for any spell-targets-an-item interaction. In this game version Disenchant
+-- is the only spell that targets a bag item this way (weapon-enchant spells
+-- target an equipped item via a different path, poisons apply via
+-- drag-and-drop rather than a spell cast at all), so no further spell-name
+-- check is needed to tell them apart - same trust level as
+-- OnContainerItemOpened above trusting hasLoot. Unlike C_Container's API,
+-- this hasn't been confirmed against another installed addon's real usage
+-- on this client, so the hook is guarded by an existence check - if it's
+-- ever missing/renamed on some future client, this just silently no-ops
+-- instead of erroring the whole file.
+local lastTargetedDisenchantItem = { link = nil, time = 0 }
+local DISENCHANT_ITEM_WINDOW = 3 -- seconds a "just spell-targeted this bag item" stays eligible to claim the next loot window
+
+local function OnSpellTargetItem(bag, slot)
+    local link = C_Container.GetContainerItemLink(bag, slot)
+    if not link then return end
+    lastTargetedDisenchantItem.link = link
+    lastTargetedDisenchantItem.time = GetTime()
+end
+if SpellTargetItem then
+    hooksecurefunc("SpellTargetItem", OnSpellTargetItem)
+end
+
+local function GetRecentlyTargetedDisenchantItem()
+    if lastTargetedDisenchantItem.link and (GetTime() - lastTargetedDisenchantItem.time) < DISENCHANT_ITEM_WINDOW then
+        return lastTargetedDisenchantItem.link
+    end
+    return nil
 end
 
 -- name is optional and only ever used to fill in (or refresh) the
@@ -267,6 +301,12 @@ local GATHERING_CATEGORIES = {
         getTotal = function(objectID) return ns.GetChestOpens(objectID) end,
         getName = function(objectID) return ns.GetChestDisplayName(objectID) end,
         goTo = function(objectID) ns.GoToChestEntry(objectID) end },
+    -- Here `key` is the DISENCHANTED item's own ns.GetItemKey, not a zone/
+    -- profession/container - see Disenchanting.lua/OnLootOpened below.
+    { key = "disenchanting", dbKey = "disenchanting", storeField = "materials", label = "Disenchanting",
+        getTotal = function(key) return ns.GetDisenchantCount(key) end,
+        getName = function(key) return ns.GetDisenchantDisplayName(key) end,
+        goTo = function(key) ns.GoToDisenchantingEntry(key) end },
 }
 
 -- Reverse index of the same drops/skins data, keyed by ns.GetItemKey
@@ -478,6 +518,32 @@ local function OnLootOpened()
         end
         ns.DebugPrint("recorded %d item(s) from container %d's loot window.", itemsRecorded, objectID)
         return
+    end
+
+    local disenchantedLink = GetRecentlyTargetedDisenchantItem()
+    if disenchantedLink then
+        -- Consumed immediately, same reasoning as the container-item cache
+        -- below - so a second, unrelated loot window shortly after can't
+        -- also get misattributed to this same disenchant.
+        lastTargetedDisenchantItem.link = nil
+
+        local sourceKey = ns.GetItemKey(disenchantedLink)
+        if sourceKey then
+            currentLootIsContainer = true
+            ns.RecordDisenchant(sourceKey, disenchantedLink)
+
+            local itemsRecorded = 0
+            for i = 1, GetNumLootItems() do
+                local _, _, quantity = GetLootSlotInfo(i)
+                local link = GetLootSlotLink(i)
+                if link then
+                    ns.RecordDisenchantMaterial(sourceKey, disenchantedLink, link, quantity or 1)
+                    itemsRecorded = itemsRecorded + 1
+                end
+            end
+            ns.DebugPrint("recorded %d material(s) from disenchanting %s.", itemsRecorded, disenchantedLink)
+            return
+        end
     end
 
     local containerItemID, containerLink = GetRecentlyOpenedContainerItem()

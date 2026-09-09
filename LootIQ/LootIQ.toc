@@ -2,7 +2,7 @@
 ## Title: LootIQ
 ## Notes: Intelligent Looting Assistant
 ## Author: Deadline
-## Version: 0.1.0.04
+## Version: 0.1.0.05
 ## SavedVariables: LootIQDB
 ## SavedVariablesPerCharacter: LootIQCharDB
 ## OptionalDeps: Auctionator, Questie
@@ -21,6 +21,7 @@ Mining.lua
 Herbalism.lua
 Crafting.lua
 Chests.lua
+Disenchanting.lua
 Tooltip.lua
 AuctionScan.lua
 AutoVendor.lua
