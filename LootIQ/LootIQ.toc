@@ -2,7 +2,7 @@
 ## Title: LootIQ
 ## Notes: Intelligent Looting Assistant
 ## Author: Deadline
-## Version: 0.1.0.02
+## Version: 0.1.0.03
 ## SavedVariables: LootIQDB
 ## SavedVariablesPerCharacter: LootIQCharDB
 ## OptionalDeps: Auctionator, Questie
