@@ -1,0 +1,26 @@
+## Interface: 11509
+## Title: LootIQ
+## Notes: Intelligent Looting Assistant
+## Author: Deadline
+## Version: 0.1.0.02
+## SavedVariables: LootIQDB
+## SavedVariablesPerCharacter: LootIQCharDB
+## OptionalDeps: Auctionator, Questie
+
+Core.lua
+Options.lua
+OptionsLists.lua
+BrowserPanel.lua
+CreatureDatabase.lua
+ItemDatabase.lua
+FlipIt.lua
+Bar.lua
+Loot.lua
+Fishing.lua
+Mining.lua
+Herbalism.lua
+Crafting.lua
+Chests.lua
+Tooltip.lua
+AuctionScan.lua
+AutoVendor.lua

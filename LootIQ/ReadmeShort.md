@@ -1,0 +1,1 @@
+**LootIQ** tracks what you loot, where you got it, and what it's worth—building your own searchable loot database as you play. With Auctionator and Questie integration, LootIQ turns every drop into useful information.
