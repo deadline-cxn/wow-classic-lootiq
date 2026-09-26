@@ -92,16 +92,17 @@ local function AddSourceLine(tooltip, key)
     tooltip:Show()
 end
 
--- Blizzard refires OnTooltipSetItem every frame for bag/vendor item
--- tooltips (to refresh stack counts/charges), not just once per mouseover.
--- Without this guard, AddSourceLine would append another copy of the
--- source lines each frame, making the tooltip grow and flicker
--- continuously. addedSourceKey tracks which item already got its lines
--- added for the tooltip currently on screen, and is cleared below whenever
--- the tooltip is cleared (i.e. a genuinely new mouseover target).
+-- Both OnTooltipSetItem and TooltipDataProcessor's post-call refire on
+-- every frame for bag/vendor item tooltips (to refresh stack counts/
+-- charges), not just once per mouseover. Without this guard, AddSourceLine
+-- would append another copy of the source lines each frame, making the
+-- tooltip grow and flicker continuously. addedSourceKey tracks which item
+-- already got its lines added for the tooltip currently on screen, and is
+-- cleared below whenever the tooltip is cleared (i.e. a genuinely new
+-- mouseover target).
 local addedSourceKey
 
-GameTooltip:HookScript("OnTooltipSetItem", function(tooltip)
+local function OnItemTooltip(tooltip)
     if not ns.accountDB then return end
 
     local _, link = tooltip:GetItem()
@@ -122,13 +123,29 @@ GameTooltip:HookScript("OnTooltipSetItem", function(tooltip)
         addedSourceKey = key
         AddSourceLine(tooltip, key)
     end)
-end)
+end
 
 GameTooltip:HookScript("OnTooltipCleared", function()
     addedSourceKey = nil
 end)
 
-GameTooltip:HookScript("OnTooltipSetUnit", function(tooltip)
+-- Retail (Midnight) can populate an item tooltip asynchronously in a way
+-- OnTooltipSetItem doesn't reliably fire for - TooltipDataProcessor is the
+-- modern replacement, confirmed via Auctionator's own Source/Tooltips/
+-- Hooks.lua, which branches on exactly this (TooltipDataProcessor and
+-- C_TooltipInfo both present) and falls back to OnTooltipSetItem only when
+-- they're absent. This addon's client is retail-only, so the fallback
+-- branch below is dead code here, but kept for parity with that evidence
+-- rather than assumed away.
+if TooltipDataProcessor and C_TooltipInfo then
+    TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, function(tooltip)
+        if tooltip == GameTooltip then OnItemTooltip(tooltip) end
+    end)
+else
+    GameTooltip:HookScript("OnTooltipSetItem", OnItemTooltip)
+end
+
+local function OnUnitTooltip(tooltip)
     if not ns.accountDB then return end
 
     local _, unit = tooltip:GetUnit()
@@ -151,7 +168,22 @@ GameTooltip:HookScript("OnTooltipSetUnit", function(tooltip)
         if not currentUnit or UnitGUID(currentUnit) ~= guid then return end
         ns.AddDropLines(tooltip, creatureID)
     end)
-end)
+end
+
+-- Same TooltipDataProcessor requirement as the item hook above - retail
+-- removed the "OnTooltipSetUnit" virtual script from GameTooltip entirely
+-- (HookScript on it now errors: "bad argument #2 to HookScript", confirmed
+-- in-game on this client), not just made it unreliable. Prat-3.0's own
+-- AltNames.lua module hits this exact fork (TooltipDataProcessor present ->
+-- Enum.TooltipDataType.Unit; absent -> the old HookScript, which it only
+-- uses via SecureHookScript on non-retail).
+if TooltipDataProcessor and C_TooltipInfo then
+    TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Unit, function(tooltip)
+        if tooltip == GameTooltip then OnUnitTooltip(tooltip) end
+    end)
+else
+    GameTooltip:HookScript("OnTooltipSetUnit", OnUnitTooltip)
+end
 
 local function AddGatherLines(tooltip, headerFormat, dbKey, storeField, getTotal, zone)
     local entry = ns.accountDB[dbKey][zone]
