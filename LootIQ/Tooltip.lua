@@ -92,15 +92,15 @@ local function AddSourceLine(tooltip, key)
     tooltip:Show()
 end
 
--- Blizzard refires OnTooltipSetItem every frame for bag/vendor item
--- tooltips (to refresh stack counts/charges), not just once per mouseover.
--- Without this guard, AddSourceLine would append another copy of the
--- source lines each frame, making the tooltip grow and flicker
--- continuously. addedSourceKey tracks which item already got its lines
--- added for the tooltip currently on screen, and is cleared below whenever
--- the tooltip is cleared (i.e. a genuinely new mouseover target).
-local addedSourceKey
-
+-- Added synchronously, NOT deferred via C_Timer like the unit-tooltip hook
+-- below. Blizzard refires OnTooltipSetItem every frame for a bag/vendor
+-- item's tooltip (to keep stack counts/charges current), clearing and
+-- rebuilding the base tooltip each time. A deferred (next-frame) add here
+-- used to land one frame behind that per-frame rebuild, so the tooltip
+-- visibly resized smaller-then-bigger on every single frame - that
+-- oscillation was the reported flicker. Adding in the same frame as the
+-- rebuild avoids that; a plain link/world tooltip only fires this hook
+-- once anyway, so there's no clipping race to defer around here.
 GameTooltip:HookScript("OnTooltipSetItem", function(tooltip)
     if not ns.accountDB then return end
 
@@ -109,23 +109,9 @@ GameTooltip:HookScript("OnTooltipSetItem", function(tooltip)
     -- its own specific roll's entry rather than whichever roll happened to
     -- be recorded under the bare itemID (see Core.lua's ns.GetItemKey).
     local key = link and ns.GetItemKey(link)
-    if not key or key == addedSourceKey then return end
+    if not key then return end
 
-    -- Deferred for the same reason as the unit-tooltip hook below: run
-    -- after other tooltip addons finish resizing so these lines don't get
-    -- clipped.
-    C_Timer.After(0, function()
-        if not tooltip:IsShown() then return end
-        local _, currentLink = tooltip:GetItem()
-        local currentKey = currentLink and ns.GetItemKey(currentLink)
-        if currentKey ~= key then return end
-        addedSourceKey = key
-        AddSourceLine(tooltip, key)
-    end)
-end)
-
-GameTooltip:HookScript("OnTooltipCleared", function()
-    addedSourceKey = nil
+    AddSourceLine(tooltip, key)
 end)
 
 GameTooltip:HookScript("OnTooltipSetUnit", function(tooltip)
