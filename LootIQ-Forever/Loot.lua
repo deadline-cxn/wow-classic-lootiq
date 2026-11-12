@@ -97,32 +97,56 @@ end
 
 -- Disenchant is cast by clicking its spellbook icon (which puts the cursor
 -- into "spell targeting" mode without starting a cast yet), then clicking a
--- bag item to target it. There is no dedicated "SpellTargetItem" API for
--- this - per the default ContainerFrame's own click handler, that click
--- just calls the ordinary C_Container.PickupContainerItem(bag, slot), which
--- redirects to the pending spell target instead of picking the item up
--- when SpellIsTargeting() is true. In this game version Disenchant is the
--- only spell that targets a bag item this way (weapon-enchant spells target
--- an equipped item via a different path, poisons apply via drag-and-drop
--- rather than a spell cast at all), so no further spell-name check is
--- needed to tell them apart - same trust level as OnContainerItemOpened
--- above trusting hasLoot. The check has to run BEFORE PickupContainerItem
--- resolves the pending target (a plain override, not hooksecurefunc) since
--- SpellIsTargeting() flips back to false as soon as the target is provided,
--- which can happen inside that same call.
+-- bag item to target it. That click just calls the ordinary
+-- C_Container.PickupContainerItem(bag, slot), which the client redirects to
+-- the pending spell target instead of picking the item up when
+-- SpellIsTargeting() is true.
+--
+-- First attempt overrode C_Container.PickupContainerItem itself to read
+-- SpellIsTargeting()/the bag link before calling through to the original -
+-- needed because SpellIsTargeting() flips back to false as soon as the
+-- target resolves, which happens inside that same call. That got LootIQ
+-- blocked in-game with "LootIQ has been blocked from an action only
+-- available to the Blizzard UI": REPLACING a protected Blizzard function
+-- taints its closure, so the real click that then runs through it executes
+-- as addon code and the client refuses the resulting pickup/target-resolve.
+-- Reading state is never tainted, only replacing a protected function is -
+-- so instead of hooking the click at all, bag contents are snapshotted
+-- every frame while SpellIsTargeting() is true (the brief window between
+-- clicking Disenchant's icon and clicking the bag item target) and diffed
+-- against the current bags the moment UNIT_SPELLCAST_SUCCEEDED reports
+-- Disenchant completing - whichever previously-seen slot is now
+-- empty/decreased is the disenchanted item.
 local lastTargetedDisenchantItem = { link = nil, time = 0 }
-local DISENCHANT_ITEM_WINDOW = 3 -- seconds a "just spell-targeted this bag item" stays eligible to claim the next loot window
+local DISENCHANT_ITEM_WINDOW = 3 -- seconds a "just resolved a disenchant target" stays eligible to claim the next loot window
 
-local OriginalPickupContainerItem = C_Container.PickupContainerItem
-C_Container.PickupContainerItem = function(bag, slot)
-    if SpellIsTargeting() then
-        local link = C_Container.GetContainerItemLink(bag, slot)
-        if link then
-            lastTargetedDisenchantItem.link = link
-            lastTargetedDisenchantItem.time = GetTime()
+local pendingDisenchantSnapshot = nil
+local disenchantSnapshotWatcher = CreateFrame("Frame")
+disenchantSnapshotWatcher:SetScript("OnUpdate", function()
+    if not SpellIsTargeting() then return end
+    local snapshot = {}
+    for bag = 0, NUM_BAG_SLOTS do
+        for slot = 1, (C_Container.GetContainerNumSlots(bag) or 0) do
+            local info = C_Container.GetContainerItemInfo(bag, slot)
+            if info and info.itemID then
+                snapshot[bag * 100 + slot] = { itemID = info.itemID, link = info.hyperlink, count = info.stackCount or 1 }
+            end
         end
     end
-    return OriginalPickupContainerItem(bag, slot)
+    pendingDisenchantSnapshot = snapshot
+end)
+
+local function FindDisenchantedLink()
+    if not pendingDisenchantSnapshot then return nil end
+    for key, prev in pairs(pendingDisenchantSnapshot) do
+        local bag, slot = math.floor(key / 100), key % 100
+        local info = C_Container.GetContainerItemInfo(bag, slot)
+        local nowCount = (info and info.itemID == prev.itemID) and (info.stackCount or 1) or 0
+        if nowCount < prev.count then
+            return prev.link
+        end
+    end
+    return nil
 end
 
 local function GetRecentlyTargetedDisenchantItem()
@@ -646,7 +670,7 @@ frame:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
 frame:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
 frame:RegisterEvent("MERCHANT_SHOW")
 frame:RegisterUnitEvent("UNIT_HEALTH", "target")
-frame:SetScript("OnEvent", function(self, event, msg)
+frame:SetScript("OnEvent", function(self, event, msg, _, spellID)
     if event == "LOOT_OPENED" then
         OnLootOpened()
     elseif event == "LOOT_CLOSED" then
@@ -680,6 +704,25 @@ frame:SetScript("OnEvent", function(self, event, msg)
     elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
         if msg == "player" then
             CacheDeadTarget()
+
+            -- GetSpellInfo is gone on some retail builds (per
+            -- GetMerchantItemPrice's identical fallback above) - try the
+            -- modern C_Spell API first, fall back to the classic global.
+            local spellName
+            if C_Spell and C_Spell.GetSpellInfo then
+                local info = C_Spell.GetSpellInfo(spellID)
+                spellName = info and info.name
+            end
+            if not spellName and GetSpellInfo then
+                spellName = GetSpellInfo(spellID)
+            end
+            if spellName == "Disenchant" then
+                local link = FindDisenchantedLink()
+                if link then
+                    lastTargetedDisenchantItem.link = link
+                    lastTargetedDisenchantItem.time = GetTime()
+                end
+            end
         end
     elseif event == "COMBAT_LOG_EVENT_UNFILTERED" then
         local _, subevent, _, _, _, _, _, destGUID, destName = CombatLogGetCurrentEventInfo()
