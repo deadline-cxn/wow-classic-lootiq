@@ -1,9 +1,26 @@
 local ADDON_NAME, ns = ...
 
--- Kill counting is driven entirely by the combat log's PARTY_KILL subevent
--- (fired whenever you or your group gets credit for a kill), independent
--- of whether the corpse is ever looted. This matches "kills tracked" to
--- actual kills rather than to loot interactions.
+-- Kill counting used to be driven entirely by the combat log's PARTY_KILL
+-- subevent (fired whenever you or your group gets credit for a kill),
+-- independent of whether the corpse is ever looted - this matched "kills
+-- tracked" to actual kills rather than to loot interactions. That had to be
+-- dropped (2026-11-12): merely registering for COMBAT_LOG_EVENT_UNFILTERED
+-- on this client, regardless of what the handler does with it, gets LootIQ
+-- blocked in-game with "LootIQ has been blocked from an action only
+-- available to the Blizzard UI" (confirmed via bisection - removing just
+-- that one RegisterEvent call, with everything else untouched, is what
+-- fixes it; even a handler that never calls CombatLogGetCurrentEventInfo()
+-- still triggers it as long as the frame is registered for that event).
+-- RecordKill is now instead called from every place that successfully
+-- attributes a drop/money gain to a creature via GetTargetCreature's
+-- fallback-target cache (the OnLootOpened creature-drop branch, the
+-- CHAT_MSG_LOOT fallback, and the PLAYER_MONEY handler below) - it still
+-- dedupes per GUID via killCounted, so a creature is only ever counted
+-- once regardless of how many of those paths see it. Tradeoff: a creature
+-- your group kills but that you personally never loot from (someone else
+-- needs/greeds it first) no longer counts - acceptable since kills only
+-- feed the drop-rate percentages shown in the Source Database/tooltips,
+-- not anything safety-critical.
 --
 -- Item recording is separate: LOOT_OPENED is the primary, accurate source
 -- for what a creature drops, since it snapshots the loot window directly.
@@ -646,6 +663,7 @@ local function OnLootOpened()
     end
 
     currentLootGuid = guid
+    RecordKill(guid, creatureID, name)
 
     local itemsRecorded = 0
     for i = 1, GetNumLootItems() do
@@ -667,7 +685,6 @@ frame:RegisterEvent("CHAT_MSG_LOOT")
 frame:RegisterEvent("PLAYER_MONEY")
 frame:RegisterEvent("PLAYER_TARGET_CHANGED")
 frame:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
-frame:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
 frame:RegisterEvent("MERCHANT_SHOW")
 frame:RegisterUnitEvent("UNIT_HEALTH", "target")
 frame:SetScript("OnEvent", function(self, event, msg, _, spellID)
@@ -695,6 +712,7 @@ frame:SetScript("OnEvent", function(self, event, msg, _, spellID)
         if gained > 0 then
             local fallbackGuid, fallbackCreatureID, fallbackName = GetTargetCreature()
             if fallbackGuid then
+                RecordKill(fallbackGuid, fallbackCreatureID, fallbackName)
                 RecordMoneyLoot(fallbackCreatureID, gained, fallbackName)
                 ns.DebugPrint("recorded %s copper loot for %s.", tostring(gained), ns.GetCreatureDisplayName(fallbackCreatureID))
             end
@@ -724,14 +742,6 @@ frame:SetScript("OnEvent", function(self, event, msg, _, spellID)
                 end
             end
         end
-    elseif event == "COMBAT_LOG_EVENT_UNFILTERED" then
-        local _, subevent, _, _, _, _, _, destGUID, destName = CombatLogGetCurrentEventInfo()
-        if subevent == "PARTY_KILL" then
-            local creatureID = GetCreatureIDFromGUID(destGUID)
-            if creatureID then
-                RecordKill(destGUID, creatureID, destName)
-            end
-        end
     elseif event == "CHAT_MSG_LOOT" then
         local fallbackGuid, fallbackCreatureID, fallbackName = GetTargetCreature()
 
@@ -750,6 +760,9 @@ frame:SetScript("OnEvent", function(self, event, msg, _, spellID)
         -- and Chests.lua's own LOOT_OPENED handling already recorded these
         -- items correctly.
         local useFallbackRecording = not currentLootIsContainer and fallbackGuid and fallbackGuid ~= currentLootGuid
+        if useFallbackRecording then
+            RecordKill(fallbackGuid, fallbackCreatureID, fallbackName)
+        end
         local fallbackItemsRecorded = 0
 
         -- Iterates every item link in the message (not just the first) since
