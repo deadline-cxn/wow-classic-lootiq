@@ -105,29 +105,24 @@ bar:SetScript("OnMouseUp", function(self, button)
 end)
 handle:SetScript("OnReceiveDrag", HandleItemDrop)
 
--- Right-click an icon for a menu to remove it from the bar.
-local removeMenuItemID = nil
-local removeMenu = CreateFrame("Frame", "LootIQRemoveMenu", UIParent, "UIDropDownMenuTemplate")
-UIDropDownMenu_Initialize(removeMenu, function()
-    if not removeMenuItemID then return end
-    local data = ns.db.session[removeMenuItemID]
-
-    local info = UIDropDownMenu_CreateInfo()
-    info.text = (data and data.link) or "Item"
-    info.isTitle = true
-    info.notCheckable = true
-    UIDropDownMenu_AddButton(info)
-
-    info = UIDropDownMenu_CreateInfo()
-    info.text = "Remove from bar"
-    info.notCheckable = true
-    info.func = function() ns.RemoveSessionItem(removeMenuItemID) end
-    UIDropDownMenu_AddButton(info)
-end, "MENU")
-
+-- Right-click an icon for a menu to remove it from the bar. Built with
+-- MenuUtil.CreateContextMenu instead of the classic
+-- CreateFrame(..., "UIDropDownMenuTemplate") + ToggleDropDownMenu pair -
+-- the latter gets blocked outright on this client ("LootIQ has been
+-- blocked from an action only available to the Blizzard UI", fired at
+-- CreateFrame time, before any player action) since the shared global
+-- dropdown template is reserved for the default UI here - see Options.lua's
+-- qualityDropdown for the fuller writeup. CreateContextMenu builds and
+-- shows the menu in one call, so itemID is just captured in the closure
+-- instead of needing module-level state for it.
 local function ShowRemoveMenu(anchorFrame, itemID)
-    removeMenuItemID = itemID
-    ToggleDropDownMenu(1, nil, removeMenu, anchorFrame, 0, 0)
+    MenuUtil.CreateContextMenu(anchorFrame, function(owner, rootDescription)
+        local data = ns.db.session[itemID]
+        rootDescription:CreateTitle((data and data.link) or "Item")
+        rootDescription:CreateButton("Remove from bar", function()
+            ns.RemoveSessionItem(itemID)
+        end)
+    end)
 end
 
 -- Shown instead of everything else while the bar is minimized. Still

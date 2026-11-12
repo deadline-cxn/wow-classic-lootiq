@@ -239,34 +239,27 @@ local alwaysVendorPanel = BuildListPanel(
         qualityLabel:SetPoint("TOPLEFT", learnCheckbox, "BOTTOMLEFT", 0, -12)
         qualityLabel:SetText("Maximum quality to auto-add (that quality and below)")
 
-        local qualityDropdown = CreateFrame("Frame", "LootIQAutoLearnQualityDropdown", panel, "UIDropDownMenuTemplate")
+        -- See Options.lua's qualityDropdown for why this is a
+        -- "DropdownButton"/MenuUtil build instead of the classic
+        -- UIDropDownMenuTemplate - the latter gets blocked outright on
+        -- this client at creation time.
+        local qualityDropdown = CreateFrame("DropdownButton", "LootIQAutoLearnQualityDropdown", panel, "WowStyle1DropdownTemplate")
         qualityDropdown:SetPoint("TOPLEFT", qualityLabel, "BOTTOMLEFT", -16, -8)
-        UIDropDownMenu_SetWidth(qualityDropdown, 150)
+        qualityDropdown:SetWidth(150)
 
-        local function OnQualitySelect(self)
-            ns.db.autoLearnVendorMaxQuality = self.value
-            UIDropDownMenu_SetSelectedValue(qualityDropdown, self.value)
-            UIDropDownMenu_SetText(qualityDropdown, ns.QualityText(self.value))
-            CloseDropDownMenus()
+        local qualityEntries = {}
+        for quality = 0, 5 do
+            table.insert(qualityEntries, { ns.QualityText(quality), quality })
         end
-
-        UIDropDownMenu_Initialize(qualityDropdown, function()
-            for quality = 0, 5 do
-                local info = UIDropDownMenu_CreateInfo()
-                info.text = ns.QualityText(quality)
-                info.value = quality
-                info.func = OnQualitySelect
-                info.checked = (ns.db and ns.db.autoLearnVendorMaxQuality == quality)
-                UIDropDownMenu_AddButton(info)
-            end
-        end)
+        MenuUtil.CreateRadioMenu(qualityDropdown,
+            function(value) return ns.db and ns.db.autoLearnVendorMaxQuality == value end,
+            function(value) ns.db.autoLearnVendorMaxQuality = value end,
+            unpack(qualityEntries))
 
         return qualityDropdown, function()
             sellCheckbox:SetChecked(ns.db.autoVendorEnabled)
             learnCheckbox:SetChecked(ns.db.autoLearnVendorEnabled)
-            local quality = ns.db.autoLearnVendorMaxQuality or 0
-            UIDropDownMenu_SetSelectedValue(qualityDropdown, quality)
-            UIDropDownMenu_SetText(qualityDropdown, ns.QualityText(quality))
+            qualityDropdown:GenerateMenu()
         end
     end
 )

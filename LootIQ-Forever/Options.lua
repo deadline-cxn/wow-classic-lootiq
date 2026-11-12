@@ -95,9 +95,21 @@ local qualityLabel = barPanel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
 qualityLabel:SetPoint("TOPLEFT", autoAddCheckbox, "BOTTOMLEFT", 0, -16)
 qualityLabel:SetText("Minimum item quality to show on the loot bar")
 
-local qualityDropdown = CreateFrame("Frame", "LootIQQualityDropdown", barPanel, "UIDropDownMenuTemplate")
+-- CreateFrame(..., "UIDropDownMenuTemplate") (the classic shared global
+-- dropdown) used to build this, but this client blocks it outright at
+-- creation time with "LootIQ has been blocked from an action only
+-- available to the Blizzard UI" - fired unconditionally on login/reload,
+-- before any player action, confirmed by checking what other installed
+-- addons on this client do instead: Auctionator and BagBrother both build
+-- their dropdowns/menus exclusively with the modern "DropdownButton" frame
+-- type + MenuUtil API now (Questie and WIM instead ship a private forked
+-- copy of the legacy system rather than touching the shared one at all) -
+-- the shared template is reserved for the default UI on this client.
+-- WowStyle1DropdownTemplate is the standard Blizzard dropdown-button look
+-- (confirmed via Auctionator's Source/Components/Frames/DropDown.xml).
+local qualityDropdown = CreateFrame("DropdownButton", "LootIQQualityDropdown", barPanel, "WowStyle1DropdownTemplate")
 qualityDropdown:SetPoint("TOPLEFT", qualityLabel, "BOTTOMLEFT", -16, -8)
-UIDropDownMenu_SetWidth(qualityDropdown, 150)
+qualityDropdown:SetWidth(150)
 
 -- Shared with the Always Vendor List panel's auto-learn quality dropdown
 -- (see OptionsLists.lua).
@@ -108,23 +120,18 @@ function ns.QualityText(quality)
 end
 local QualityText = ns.QualityText
 
-local function OnQualitySelect(self)
-    ns.db.minQuality = self.value
-    UIDropDownMenu_SetSelectedValue(qualityDropdown, self.value)
-    UIDropDownMenu_SetText(qualityDropdown, QualityText(self.value))
-    CloseDropDownMenus()
+-- MenuUtil.CreateRadioMenu(owner, isSelected, setSelected, ...{label,
+-- value} entries) wires the dropdown's button text and check marks to the
+-- selected entry automatically - no more manual SetText/SetSelectedValue
+-- calls (same confirmed usage as Auctionator's DropDown.lua).
+local qualityEntries = {}
+for quality = 0, 5 do
+    table.insert(qualityEntries, { QualityText(quality), quality })
 end
-
-UIDropDownMenu_Initialize(qualityDropdown, function()
-    for quality = 0, 5 do
-        local info = UIDropDownMenu_CreateInfo()
-        info.text = QualityText(quality)
-        info.value = quality
-        info.func = OnQualitySelect
-        info.checked = (ns.db and ns.db.minQuality == quality)
-        UIDropDownMenu_AddButton(info)
-    end
-end)
+MenuUtil.CreateRadioMenu(qualityDropdown,
+    function(value) return ns.db and ns.db.minQuality == value end,
+    function(value) ns.db.minQuality = value end,
+    unpack(qualityEntries))
 
 local showPricesCheckbox = CreateFrame("CheckButton", nil, barPanel, "UICheckButtonTemplate")
 showPricesCheckbox:SetPoint("TOPLEFT", qualityDropdown, "BOTTOMLEFT", 20, -12)
@@ -197,9 +204,7 @@ table.insert(ns.SettingsPanels, { name = "Loot Bar Panel", id = barSubcategory:G
 function ns.InitOptions()
     debugCheckbox:SetChecked(ns.db.debugMessages)
     autoAddCheckbox:SetChecked(ns.db.autoAddLoot)
-    local quality = ns.db.minQuality or 0
-    UIDropDownMenu_SetSelectedValue(qualityDropdown, quality)
-    UIDropDownMenu_SetText(qualityDropdown, QualityText(quality))
+    qualityDropdown:GenerateMenu()
     showPricesCheckbox:SetChecked(ns.db.showItemPrices)
     copperCheckbox:SetChecked(ns.db.showCopper)
     junkCheckbox:SetChecked(ns.db.showJunk)
