@@ -133,27 +133,49 @@ end
 
 -- The "World Cursor" tooltip (hovering a unit directly in the 3D world,
 -- rather than a frame like a nameplate/unitframe - the common case while
--- fighting in a dungeon) can hand this a "secret" unit token that addon
--- code is flatly not allowed to pass to UnitGUID at all ("Secret values are
--- only allowed during untainted execution for this argument" - confirmed
--- in-game via the exact error, reported happening often in dungeons, which
--- matches: that's where mousing over enemies via the world cursor instead
--- of a nameplate is most frequent). There's no legitimate way for an addon
--- to read a GUID off that token, so check issecretvalue (the client's own
--- global for this - see e.g. XPerl_Highlight.lua/QuestieTrace's identical
--- guards) before ever passing the unit token to UnitGUID, and bail out
--- safely instead of erroring.
+-- checking out/fighting a creature) can hand this a "secret" unit token
+-- that addon code is flatly not allowed to pass to UnitGUID at all
+-- ("Secret values are only allowed during untainted execution for this
+-- argument" - confirmed in-game via the exact error). That taint only
+-- lasts for the duration of whatever transient protected call the tooltip
+-- update happened to run on this one time, so - same fix/reasoning as
+-- Loot.lua's CacheDeadTarget - retry once via C_Timer.After(0, ...)
+-- instead of just giving up: giving up outright meant drop lines almost
+-- never showed when hovering a creature this way, which is the common
+-- case (confirmed via user report after the first, overly-conservative
+-- fix shipped).
+--
+-- Returns guid, creatureID (nil, nil if the unit isn't a Creature/Vehicle
+-- or isn't resolvable at all) and a 3rd `secret` flag - true specifically
+-- when the unit token or its GUID came back secret, so callers know to
+-- retry rather than treat this the same as "not a creature" (a permanent
+-- answer, nothing to retry).
+local function ResolveUnitDrop(tooltip)
+    local _, unit = tooltip:GetUnit()
+    if not unit then return nil, nil, false end
+    if issecretvalue and issecretvalue(unit) then return nil, nil, true end
+    local guid = UnitGUID(unit)
+    if not guid then return nil, nil, false end
+    if issecretvalue and issecretvalue(guid) then return nil, nil, true end
+    local unitType, _, _, _, _, creatureID = strsplit("-", guid)
+    if unitType ~= "Creature" and unitType ~= "Vehicle" then return nil, nil, false end
+    return guid, tonumber(creatureID), false
+end
+
 local function OnUnitTooltip(tooltip)
     if not ns.accountDB then return end
 
-    local _, unit = tooltip:GetUnit()
-    if not unit or (issecretvalue and issecretvalue(unit)) then return end
-    local guid = UnitGUID(unit)
-    if not guid or (issecretvalue and issecretvalue(guid)) then return end
-
-    local unitType, _, _, _, _, creatureID = strsplit("-", guid)
-    if unitType ~= "Creature" and unitType ~= "Vehicle" then return end
-    creatureID = tonumber(creatureID)
+    local guid, creatureID, secret = ResolveUnitDrop(tooltip)
+    if secret then
+        C_Timer.After(0, function()
+            if not tooltip:IsShown() then return end
+            local _, retryCreatureID, retrySecret = ResolveUnitDrop(tooltip)
+            if retrySecret or not retryCreatureID then return end
+            ns.AddDropLines(tooltip, retryCreatureID)
+        end)
+        return
+    end
+    if not creatureID then return end
 
     -- Deferred to the next frame tick so this runs after other tooltip
     -- addons (e.g. TipTac) finish their own OnTooltipSetUnit pass and
@@ -162,10 +184,8 @@ local function OnUnitTooltip(tooltip)
     -- after this fires, since that resize happens after ours.
     C_Timer.After(0, function()
         if not tooltip:IsShown() then return end
-        local _, currentUnit = tooltip:GetUnit()
-        if not currentUnit or (issecretvalue and issecretvalue(currentUnit)) then return end
-        local currentGuid = UnitGUID(currentUnit)
-        if (issecretvalue and issecretvalue(currentGuid)) or currentGuid ~= guid then return end
+        local currentGuid, _, currentSecret = ResolveUnitDrop(tooltip)
+        if currentSecret or currentGuid ~= guid then return end
         ns.AddDropLines(tooltip, creatureID)
     end)
 end
