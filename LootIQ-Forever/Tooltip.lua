@@ -139,16 +139,17 @@ end
 -- in-game via the exact error, reported happening often in dungeons, which
 -- matches: that's where mousing over enemies via the world cursor instead
 -- of a nameplate is most frequent). There's no legitimate way for an addon
--- to read a GUID off that token, so just bail out safely instead of
--- erroring - pcall around both UnitGUID calls below (the immediate one and
--- the deferred re-check's).
+-- to read a GUID off that token, so check issecretvalue (the client's own
+-- global for this - see e.g. XPerl_Highlight.lua/QuestieTrace's identical
+-- guards) before ever passing the unit token to UnitGUID, and bail out
+-- safely instead of erroring.
 local function OnUnitTooltip(tooltip)
     if not ns.accountDB then return end
 
     local _, unit = tooltip:GetUnit()
-    if not unit then return end
-    local ok, guid = pcall(UnitGUID, unit)
-    if not ok or not guid then return end
+    if not unit or (issecretvalue and issecretvalue(unit)) then return end
+    local guid = UnitGUID(unit)
+    if not guid or (issecretvalue and issecretvalue(guid)) then return end
 
     local unitType, _, _, _, _, creatureID = strsplit("-", guid)
     if unitType ~= "Creature" and unitType ~= "Vehicle" then return end
@@ -162,9 +163,9 @@ local function OnUnitTooltip(tooltip)
     C_Timer.After(0, function()
         if not tooltip:IsShown() then return end
         local _, currentUnit = tooltip:GetUnit()
-        if not currentUnit then return end
-        local stillOk, currentGuid = pcall(UnitGUID, currentUnit)
-        if not stillOk or currentGuid ~= guid then return end
+        if not currentUnit or (issecretvalue and issecretvalue(currentUnit)) then return end
+        local currentGuid = UnitGUID(currentUnit)
+        if (issecretvalue and issecretvalue(currentGuid)) or currentGuid ~= guid then return end
         ns.AddDropLines(tooltip, creatureID)
     end)
 end

@@ -40,7 +40,18 @@ local lastDeadTarget = { guid = nil, creatureID = nil, name = nil, time = 0 }
 local FALLBACK_WINDOW = 5 -- seconds a cached dead target stays usable as a fallback
 local lastKnownMoney = GetMoney()
 
+-- UnitGUID("target") can itself come back as a "secret" opaque value - not
+-- the real GUID string - when called from code running on the call stack
+-- of a protected/secure action (confirmed in-game: CacheDeadTarget's
+-- UNIT_HEALTH/PLAYER_TARGET_CHANGED handler, reached via the client's
+-- TURNORACTION secure macro conditional, which is common while fighting in
+-- a dungeon). strsplit's implicit string conversion of a secret value
+-- throws ("attempt to perform string conversion on a secret string value"),
+-- so bail out via issecretvalue (the client's own global for this, see
+-- XPerl/QuestieTrace's identical guards) before ever touching it as a
+-- string.
 local function GetCreatureIDFromGUID(guid)
+    if issecretvalue and issecretvalue(guid) then return nil end
     local unitType, _, _, _, _, creatureID = strsplit("-", guid or "")
     if unitType == "Creature" or unitType == "Vehicle" then
         return tonumber(creatureID)
