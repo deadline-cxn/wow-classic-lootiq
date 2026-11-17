@@ -170,53 +170,70 @@ local function ResolveUnitDrop()
     return guid, tonumber(creatureID), false
 end
 
+-- Diagnostic prints (added temporarily, confirmed the actual cause, kept
+-- for now) showed the ORIGINAL retry - a fresh `function() ... end`
+-- created inline inside OnUnitTooltip and handed to C_Timer.After - came
+-- back secret=true just like the immediate attempt, even a full frame
+-- later. That's a real, independently-documented WoW taint mechanic, not
+-- specific to this client: a closure CREATED while running on a tainted
+-- call stack inherits that taint at CREATION time, regardless of how much
+-- later it's actually invoked. OnUnitTooltip always runs on GameTooltip's
+-- protected tooltip-processing call stack (confirmed via
+-- `securecallfunction` in the original crash's own stack trace), so every
+-- closure it ever creates - including both retries below, as they were
+-- originally written - was tainted from birth; waiting a frame never
+-- mattered. Loot.lua's CacheDeadTarget retry works specifically because
+-- it calls `TryCacheDeadTarget`, a plain pre-existing named function
+-- defined at file load, never created inside a tainted call - so both
+-- retries here are now written the same way: defined ONCE, here, reading
+-- what they need from a scratch variable stashed right before scheduling
+-- instead of capturing it as a fresh closure upvalue.
+local pendingSecretRetryTooltip = nil
+local function RetryUnitTooltipSecret()
+    local tooltip = pendingSecretRetryTooltip
+    pendingSecretRetryTooltip = nil
+    if not tooltip or not tooltip:IsShown() then return end
+    local _, creatureID, secret = ResolveUnitDrop()
+    ns.DebugPrint("tooltip debug (retry): creatureID=%s secret=%s", tostring(creatureID), tostring(secret))
+    if secret or not creatureID then return end
+    ns.AddDropLines(tooltip, creatureID)
+end
+
+local pendingClipRetryTooltip, pendingClipRetryGuid, pendingClipRetryCreatureID = nil, nil, nil
+local function RetryUnitTooltipClip()
+    local tooltip, guid, creatureID = pendingClipRetryTooltip, pendingClipRetryGuid, pendingClipRetryCreatureID
+    pendingClipRetryTooltip, pendingClipRetryGuid, pendingClipRetryCreatureID = nil, nil, nil
+    if not tooltip or not tooltip:IsShown() then return end
+    local currentGuid, _, currentSecret = ResolveUnitDrop()
+    if currentSecret or currentGuid ~= guid then return end
+    ns.AddDropLines(tooltip, creatureID)
+end
+
 local function OnUnitTooltip(tooltip)
     if not ns.accountDB then return end
 
-    -- TEMPORARY diagnostic (remove once the hover-tooltip issue is
-    -- actually pinned down) - prints exactly what ResolveUnitDrop saw,
-    -- since guessing blind through more deploy/retest cycles isn't
-    -- converging. Safe to print unconditionally: tostring(guid)/
-    -- tostring(creatureID) are nil whenever `secret` is true (ResolveUnitDrop
-    -- never returns a secret value itself, only nil in that case).
+    -- TEMPORARY diagnostic (remove once the hover-tooltip issue is fully
+    -- confirmed fixed) - safe to print unconditionally: tostring(guid)/
+    -- tostring(creatureID) are nil whenever `secret` is true.
     local guid, creatureID, secret = ResolveUnitDrop()
     ns.DebugPrint("tooltip debug: mouseoverExists=%s targetExists=%s hoveringOwnTarget=%s guid=%s creatureID=%s secret=%s",
         tostring(UnitExists("mouseover")), tostring(UnitExists("target")), tostring(IsHoveringOwnTarget()),
         tostring(guid), tostring(creatureID), tostring(secret))
 
     if secret then
-        C_Timer.After(0, function()
-            if not tooltip:IsShown() then
-                ns.DebugPrint("tooltip debug (retry): tooltip no longer shown, bailing")
-                return
-            end
-            local _, retryCreatureID, retrySecret = ResolveUnitDrop()
-            ns.DebugPrint("tooltip debug (retry): creatureID=%s secret=%s", tostring(retryCreatureID), tostring(retrySecret))
-            if retrySecret or not retryCreatureID then return end
-            local entry = ns.accountDB.creatures[retryCreatureID]
-            ns.DebugPrint("tooltip debug (retry): entry=%s kills=%s", tostring(entry ~= nil), tostring(entry and entry.kills))
-            ns.AddDropLines(tooltip, retryCreatureID)
-        end)
+        pendingSecretRetryTooltip = tooltip
+        C_Timer.After(0, RetryUnitTooltipSecret)
         return
     end
     if not creatureID then return end
-
-    do
-        local entry = ns.accountDB.creatures[creatureID]
-        ns.DebugPrint("tooltip debug (non-secret path): entry=%s kills=%s", tostring(entry ~= nil), tostring(entry and entry.kills))
-    end
 
     -- Deferred to the next frame tick so this runs after other tooltip
     -- addons (e.g. TipTac) finish their own OnTooltipSetUnit pass and
     -- resize the tooltip. Adding lines synchronously here can get them
     -- clipped if something else recalculates the tooltip's size right
     -- after this fires, since that resize happens after ours.
-    C_Timer.After(0, function()
-        if not tooltip:IsShown() then return end
-        local currentGuid, _, currentSecret = ResolveUnitDrop()
-        if currentSecret or currentGuid ~= guid then return end
-        ns.AddDropLines(tooltip, creatureID)
-    end)
+    pendingClipRetryTooltip, pendingClipRetryGuid, pendingClipRetryCreatureID = tooltip, guid, creatureID
+    C_Timer.After(0, RetryUnitTooltipClip)
 end
 
 -- Same TooltipDataProcessor requirement as the item hook above - retail
