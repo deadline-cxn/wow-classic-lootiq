@@ -131,13 +131,24 @@ else
     GameTooltip:HookScript("OnTooltipSetItem", OnItemTooltip)
 end
 
+-- The "World Cursor" tooltip (hovering a unit directly in the 3D world,
+-- rather than a frame like a nameplate/unitframe - the common case while
+-- fighting in a dungeon) can hand this a "secret" unit token that addon
+-- code is flatly not allowed to pass to UnitGUID at all ("Secret values are
+-- only allowed during untainted execution for this argument" - confirmed
+-- in-game via the exact error, reported happening often in dungeons, which
+-- matches: that's where mousing over enemies via the world cursor instead
+-- of a nameplate is most frequent). There's no legitimate way for an addon
+-- to read a GUID off that token, so just bail out safely instead of
+-- erroring - pcall around both UnitGUID calls below (the immediate one and
+-- the deferred re-check's).
 local function OnUnitTooltip(tooltip)
     if not ns.accountDB then return end
 
     local _, unit = tooltip:GetUnit()
     if not unit then return end
-    local guid = UnitGUID(unit)
-    if not guid then return end
+    local ok, guid = pcall(UnitGUID, unit)
+    if not ok or not guid then return end
 
     local unitType, _, _, _, _, creatureID = strsplit("-", guid)
     if unitType ~= "Creature" and unitType ~= "Vehicle" then return end
@@ -151,7 +162,9 @@ local function OnUnitTooltip(tooltip)
     C_Timer.After(0, function()
         if not tooltip:IsShown() then return end
         local _, currentUnit = tooltip:GetUnit()
-        if not currentUnit or UnitGUID(currentUnit) ~= guid then return end
+        if not currentUnit then return end
+        local stillOk, currentGuid = pcall(UnitGUID, currentUnit)
+        if not stillOk or currentGuid ~= guid then return end
         ns.AddDropLines(tooltip, creatureID)
     end)
 end
