@@ -641,6 +641,51 @@ local function TryAutoAddToBar(link)
     end
 end
 
+-- Resolves (guid, creatureID, name) for the creature the currently-open
+-- loot window belongs to, or returns nil if it can't right now (caller
+-- decides whether/how to retry - see OnLootOpened). Prefers the loot
+-- window's own source GUID (reliable, no guessing - GetLootSourceCreature)
+-- and only falls back to the target-cache heuristic (GetTargetCreature,
+-- which also supplies a name directly) if that somehow can't resolve one.
+local function ResolveLootCreature()
+    local guid, creatureID, name = GetLootSourceCreature()
+    if not creatureID then
+        guid, creatureID, name = GetTargetCreature()
+    end
+    if not creatureID then return nil end
+
+    -- GetLootSourceCreature's GUID alone carries no name - if that's the
+    -- path that resolved it (name still nil), use "target"'s name when
+    -- it's still the same corpse (the common case). Otherwise falls back
+    -- to whatever name (if any) is already on file for this creature
+    -- (GetOrCreateCreature keeps the existing name when nil is passed, and
+    -- backfills from Questie's database if there's never been one at all).
+    if not name then
+        local targetGuid = UnitGUID("target")
+        if not (issecretvalue and issecretvalue(targetGuid)) and targetGuid == guid then
+            name = UnitName("target")
+        end
+    end
+    return guid, creatureID, name
+end
+
+local function RecordCreatureLootWindow(guid, creatureID, name)
+    currentLootGuid = guid
+    RecordKill(guid, creatureID, name)
+
+    local itemsRecorded = 0
+    for i = 1, GetNumLootItems() do
+        local _, _, quantity = GetLootSlotInfo(i)
+        local link = GetLootSlotLink(i)
+        if link then
+            RecordCreatureDrop(creatureID, link, quantity or 1, name)
+            TryAutoAddToBar(link)
+            itemsRecorded = itemsRecorded + 1
+        end
+    end
+    ns.DebugPrint("recorded %d item(s) from %s's loot window.", itemsRecorded, ns.GetCreatureDisplayName(creatureID))
+end
+
 local function OnLootOpened()
     local objectID = GetLootObjectID()
     if objectID then
@@ -715,47 +760,32 @@ local function OnLootOpened()
     end
     currentLootIsContainer = false
 
-    -- Prefer the loot window's own source GUID (reliable, no guessing) -
-    -- only fall back to the target-cache heuristic (which also supplies a
-    -- name directly) if that somehow can't resolve a creature (e.g. no
-    -- loot window open yet at all, which shouldn't normally happen here
-    -- since OnLootOpened only runs because one just did).
-    local guid, creatureID, name = GetLootSourceCreature()
-    if not creatureID then
-        guid, creatureID, name = GetTargetCreature()
-    end
-    if not creatureID then
-        ns.DebugPrint("couldn't identify the loot source (no recent dead target) - items from this loot weren't recorded.")
+    local guid, creatureID, name = ResolveLootCreature()
+    if creatureID then
+        RecordCreatureLootWindow(guid, creatureID, name)
         return
     end
 
-    -- GetLootSourceCreature's GUID alone carries no name - if that's the
-    -- path that resolved it (name still nil), use "target"'s name when
-    -- it's still the same corpse (the common case). Otherwise falls back
-    -- to whatever name (if any) is already on file for this creature
-    -- (GetOrCreateCreature keeps the existing name when nil is passed, and
-    -- backfills from Questie's database if there's never been one at all).
-    if not name then
-        local targetGuid = UnitGUID("target")
-        if not (issecretvalue and issecretvalue(targetGuid)) and targetGuid == guid then
-            name = UnitName("target")
+    -- Couldn't resolve a creature right now - could be a genuine "no
+    -- recent dead target", but could also just be a transient
+    -- secret-value hiccup on this exact read (see CacheDeadTarget's
+    -- comment). Retry once next frame before giving up - the loot window
+    -- is still open by then in virtually every case (nothing closes it
+    -- within a single frame), so GetNumLootItems()/GetLootSlotLink still
+    -- see the same items; GetNumLootItems() == 0 below catches the rare
+    -- case where it did close in the meantime.
+    C_Timer.After(0, function()
+        if GetNumLootItems() == 0 then
+            ns.DebugPrint("couldn't identify the loot source (no recent dead target) - items from this loot weren't recorded.")
+            return
         end
-    end
-
-    currentLootGuid = guid
-    RecordKill(guid, creatureID, name)
-
-    local itemsRecorded = 0
-    for i = 1, GetNumLootItems() do
-        local _, _, quantity = GetLootSlotInfo(i)
-        local link = GetLootSlotLink(i)
-        if link then
-            RecordCreatureDrop(creatureID, link, quantity or 1, name)
-            TryAutoAddToBar(link)
-            itemsRecorded = itemsRecorded + 1
+        local retryGuid, retryCreatureID, retryName = ResolveLootCreature()
+        if not retryCreatureID then
+            ns.DebugPrint("couldn't identify the loot source (no recent dead target) - items from this loot weren't recorded.")
+            return
         end
-    end
-    ns.DebugPrint("recorded %d item(s) from %s's loot window.", itemsRecorded, ns.GetCreatureDisplayName(creatureID))
+        RecordCreatureLootWindow(retryGuid, retryCreatureID, retryName)
+    end)
 end
 
 local frame = CreateFrame("Frame")

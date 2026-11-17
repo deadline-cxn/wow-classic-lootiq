@@ -133,28 +133,21 @@ end
 
 -- The "World Cursor" tooltip (hovering a unit directly in the 3D world,
 -- rather than a frame like a nameplate/unitframe - the common case while
--- checking out/fighting a creature) can hand this a "secret" unit token
--- that addon code is flatly not allowed to pass to UnitGUID at all
--- ("Secret values are only allowed during untainted execution for this
--- argument" - confirmed in-game via the exact error). That taint only
--- lasts for the duration of whatever transient protected call the tooltip
--- update happened to run on this one time, so - same fix/reasoning as
--- Loot.lua's CacheDeadTarget - retry once via C_Timer.After(0, ...)
--- instead of just giving up: giving up outright meant drop lines almost
--- never showed when hovering a creature this way, which is the common
--- case (confirmed via user report after the first, overly-conservative
--- fix shipped).
---
--- Returns guid, creatureID (nil, nil if the unit isn't a Creature/Vehicle
--- or isn't resolvable at all) and a 3rd `secret` flag - true specifically
--- when the unit token or its GUID came back secret, so callers know to
--- retry rather than treat this the same as "not a creature" (a permanent
--- answer, nothing to retry).
-local function ResolveUnitDrop(tooltip)
-    local _, unit = tooltip:GetUnit()
-    if not unit then return nil, nil, false end
-    if issecretvalue and issecretvalue(unit) then return nil, nil, true end
-    local guid = UnitGUID(unit)
+-- checking out/fighting a creature) hands tooltip:GetUnit() an opaque
+-- secret token for that specific internal handle - confirmed NOT fixable
+-- by retrying a frame later (tried that first; user reported drop lines
+-- still never showed). Sidestepped entirely by not using GetUnit()'s
+-- token at all: "mouseover" is the ordinary, always-public unit ID that's
+-- worked the same way since Classic, set the instant the cursor is over
+-- ANY unit (a frame/nameplate or a raw world model alike) - a completely
+-- separate mechanism from whatever secret handle the World Cursor
+-- tooltip's own internals use. This postcall only ever fires because
+-- hovering just set up a unit tooltip in the first place, so "mouseover"
+-- is always the right unit to check here. Kept the issecretvalue guard
+-- (with a single next-frame retry) as a defensive fallback in case
+-- "mouseover" itself is ever secret too, but that's not the normal case.
+local function ResolveUnitDrop()
+    local guid = UnitGUID("mouseover")
     if not guid then return nil, nil, false end
     if issecretvalue and issecretvalue(guid) then return nil, nil, true end
     local unitType, _, _, _, _, creatureID = strsplit("-", guid)
@@ -165,11 +158,11 @@ end
 local function OnUnitTooltip(tooltip)
     if not ns.accountDB then return end
 
-    local guid, creatureID, secret = ResolveUnitDrop(tooltip)
+    local guid, creatureID, secret = ResolveUnitDrop()
     if secret then
         C_Timer.After(0, function()
             if not tooltip:IsShown() then return end
-            local _, retryCreatureID, retrySecret = ResolveUnitDrop(tooltip)
+            local _, retryCreatureID, retrySecret = ResolveUnitDrop()
             if retrySecret or not retryCreatureID then return end
             ns.AddDropLines(tooltip, retryCreatureID)
         end)
@@ -184,7 +177,7 @@ local function OnUnitTooltip(tooltip)
     -- after this fires, since that resize happens after ours.
     C_Timer.After(0, function()
         if not tooltip:IsShown() then return end
-        local currentGuid, _, currentSecret = ResolveUnitDrop(tooltip)
+        local currentGuid, _, currentSecret = ResolveUnitDrop()
         if currentSecret or currentGuid ~= guid then return end
         ns.AddDropLines(tooltip, creatureID)
     end)
