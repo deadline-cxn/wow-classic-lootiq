@@ -173,7 +173,17 @@ end
 local function OnUnitTooltip(tooltip)
     if not ns.accountDB then return end
 
+    -- TEMPORARY diagnostic (remove once the hover-tooltip issue is
+    -- actually pinned down) - prints exactly what ResolveUnitDrop saw,
+    -- since guessing blind through more deploy/retest cycles isn't
+    -- converging. Safe to print unconditionally: tostring(guid)/
+    -- tostring(creatureID) are nil whenever `secret` is true (ResolveUnitDrop
+    -- never returns a secret value itself, only nil in that case).
     local guid, creatureID, secret = ResolveUnitDrop()
+    ns.DebugPrint("tooltip debug: mouseoverExists=%s targetExists=%s hoveringOwnTarget=%s guid=%s creatureID=%s secret=%s",
+        tostring(UnitExists("mouseover")), tostring(UnitExists("target")), tostring(IsHoveringOwnTarget()),
+        tostring(guid), tostring(creatureID), tostring(secret))
+
     if secret then
         C_Timer.After(0, function()
             if not tooltip:IsShown() then return end
