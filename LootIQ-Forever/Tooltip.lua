@@ -168,8 +168,17 @@ local function GetTooltipUnitName(tooltip)
     return textLeft1 and textLeft1:GetText()
 end
 
+-- GetText() itself doesn't error even when the tooltip's name line was
+-- populated from protected unit data - it still hands back a "secret"
+-- string (confirmed in-game: comparing it with == throws "attempt to
+-- compare ... a secret string value", same as comparing a secret GUID
+-- directly) rather than a plain one. Blizzard appears to propagate the
+-- secret tag through ANY string derived from a protected unit, not just
+-- raw UnitGUID reads - this guard stops the crash, though it also means
+-- there is apparently no live-hover text to match at all right now (see
+-- OnUnitTooltip's own comment on where that leaves this feature).
 local function FindCreatureIDByName(name)
-    if not name then return nil end
+    if not name or (issecretvalue and issecretvalue(name)) then return nil end
     for creatureID, entry in pairs(ns.accountDB.creatures) do
         if entry.name == name then return creatureID end
     end
