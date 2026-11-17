@@ -318,10 +318,14 @@ local function TryCacheCurrentTargetCreature()
         return
     end
     local guid = UnitGUID("target")
-    if issecretvalue and issecretvalue(guid) then return "secret" end
+    if issecretvalue and issecretvalue(guid) then
+        ns.DebugPrint("target-cache debug: UnitGUID(target) secret")
+        return "secret"
+    end
     currentTargetCreature.guid = guid
     currentTargetCreature.creatureID = GetCreatureIDFromGUID(guid)
     currentTargetCreature.name = currentTargetCreature.creatureID and UnitName("target") or nil
+    ns.DebugPrint("target-cache debug: creatureID=%s name=%s", tostring(currentTargetCreature.creatureID), tostring(currentTargetCreature.name))
 end
 
 local function CacheCurrentTargetCreature()

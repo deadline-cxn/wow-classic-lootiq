@@ -185,6 +185,9 @@ local function OnUnitTooltip(tooltip)
     if not ns.accountDB then return end
 
     local creatureID = ResolveUnitDrop()
+    local cachedID, cachedName = ns.GetCurrentTargetCreatureID()
+    ns.DebugPrint("tooltip debug: isHoveringTarget=%s cachedID=%s cachedName=%s resolvedCreatureID=%s",
+        tostring(IsHoveringTarget()), tostring(cachedID), tostring(cachedName), tostring(creatureID))
     if not creatureID then return end
 
     -- Deferred to the next frame tick so this runs after other tooltip
