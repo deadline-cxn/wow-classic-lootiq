@@ -133,27 +133,34 @@ end
 
 -- The "World Cursor" tooltip (hovering a unit directly in the 3D world,
 -- rather than a frame like a nameplate/unitframe - the common case while
--- checking out/fighting a creature) hands tooltip:GetUnit() an opaque
--- secret token for that specific internal handle - confirmed NOT fixable
--- by retrying a frame later. Tried reading "mouseover" directly instead
--- (the ordinary, always-public unit ID set by hovering any unit) - user
--- confirmed that ALSO shows nothing, even while the hovered creature was
--- also their actual target, so "mouseover" itself appears to be withheld
--- for identity reads on this client too, not just the tooltip's own
--- internal token.
+-- checking out/fighting a creature) makes ANY attempt to read unit
+-- identity from directly within this hook come back secret, permanently,
+-- for as long as the hover is ongoing - confirmed through extensive
+-- diagnostic testing: tooltip:GetUnit()'s own token, "mouseover" read
+-- directly, "target" read directly, a same-tick attempt, a retry a full
+-- frame later via C_Timer.After, and even a retry built as a pre-existing
+-- named function (never a fresh closure, which can inherit taint at
+-- creation) ALL came back secret every single time. This isn't a
+-- transient one-call taint window like Loot.lua's CacheDeadTarget deals
+-- with (that one's triggered by a specific, short-lived protected action,
+-- TurnOrActionStop) - it behaves like the World Cursor system keeps
+-- identity withheld for as long as it's actively tracking a hover, which
+-- no in-hook retry can ever outlast.
 --
--- "target" is the one unit token this addon has confirmed DOES work for
--- identity (Loot.lua's CacheDeadTarget reads it successfully, with an
--- occasional secret-value retry) - so when the hovered unit IS the
--- player's current target, prefer reading "target" instead of
--- "mouseover". UnitIsUnit never reveals raw identity (just whether two
--- tokens refer to the same unit), so it's safe to use for this check even
--- when "mouseover" itself can't be read as a GUID. This only helps while
--- hovering your own current target, not an arbitrary un-targeted
--- creature - there may be no way to read identity off a merely-hovered,
--- non-targeted unit on this client at all; "mouseover" still gets tried
--- as a fallback in case that's wrong.
-local function IsHoveringOwnTarget()
+-- The fix: never try to read unit identity from inside this hook AT ALL.
+-- Loot.lua already maintains ns.GetCurrentTargetCreatureID() - a cache of
+-- whatever's currently targeted, kept current via the ordinary
+-- PLAYER_TARGET_CHANGED event (a ONE-TIME event dispatch when you select
+-- a target, unrelated to whether the mouse happens to be hovering
+-- anything right now, and not subject to this same restriction - that's
+-- the same mechanism CacheDeadTarget already relies on). IsHoveringTarget
+-- below only needs a same-unit CHECK (UnitIsUnit, which never reveals raw
+-- identity and isn't itself secret per the diagnostics), not a GUID read,
+-- so it's safe from inside this hook. This only shows drop info while
+-- hovering your OWN current target, not an arbitrary un-targeted
+-- creature - there's no evidence of any working way to read identity off
+-- a merely-hovered, non-targeted unit on this client at all.
+local function IsHoveringTarget()
     if not (UnitExists("mouseover") and UnitExists("target")) then return false end
     local same = UnitIsUnit("mouseover", "target")
     if issecretvalue and issecretvalue(same) then return false end
@@ -161,70 +168,23 @@ local function IsHoveringOwnTarget()
 end
 
 local function ResolveUnitDrop()
-    local unit = IsHoveringOwnTarget() and "target" or "mouseover"
-    local guid = UnitGUID(unit)
-    if not guid then return nil, nil, false end
-    if issecretvalue and issecretvalue(guid) then return nil, nil, true end
-    local unitType, _, _, _, _, creatureID = strsplit("-", guid)
-    if unitType ~= "Creature" and unitType ~= "Vehicle" then return nil, nil, false end
-    return guid, tonumber(creatureID), false
+    if not IsHoveringTarget() then return nil end
+    return ns.GetCurrentTargetCreatureID()
 end
 
--- Diagnostic prints (added temporarily, confirmed the actual cause, kept
--- for now) showed the ORIGINAL retry - a fresh `function() ... end`
--- created inline inside OnUnitTooltip and handed to C_Timer.After - came
--- back secret=true just like the immediate attempt, even a full frame
--- later. That's a real, independently-documented WoW taint mechanic, not
--- specific to this client: a closure CREATED while running on a tainted
--- call stack inherits that taint at CREATION time, regardless of how much
--- later it's actually invoked. OnUnitTooltip always runs on GameTooltip's
--- protected tooltip-processing call stack (confirmed via
--- `securecallfunction` in the original crash's own stack trace), so every
--- closure it ever creates - including both retries below, as they were
--- originally written - was tainted from birth; waiting a frame never
--- mattered. Loot.lua's CacheDeadTarget retry works specifically because
--- it calls `TryCacheDeadTarget`, a plain pre-existing named function
--- defined at file load, never created inside a tainted call - so both
--- retries here are now written the same way: defined ONCE, here, reading
--- what they need from a scratch variable stashed right before scheduling
--- instead of capturing it as a fresh closure upvalue.
-local pendingSecretRetryTooltip = nil
-local function RetryUnitTooltipSecret()
-    local tooltip = pendingSecretRetryTooltip
-    pendingSecretRetryTooltip = nil
-    if not tooltip or not tooltip:IsShown() then return end
-    local _, creatureID, secret = ResolveUnitDrop()
-    ns.DebugPrint("tooltip debug (retry): creatureID=%s secret=%s", tostring(creatureID), tostring(secret))
-    if secret or not creatureID then return end
-    ns.AddDropLines(tooltip, creatureID)
-end
-
-local pendingClipRetryTooltip, pendingClipRetryGuid, pendingClipRetryCreatureID = nil, nil, nil
+local pendingClipRetryTooltip, pendingClipRetryCreatureID = nil, nil
 local function RetryUnitTooltipClip()
-    local tooltip, guid, creatureID = pendingClipRetryTooltip, pendingClipRetryGuid, pendingClipRetryCreatureID
-    pendingClipRetryTooltip, pendingClipRetryGuid, pendingClipRetryCreatureID = nil, nil, nil
+    local tooltip, creatureID = pendingClipRetryTooltip, pendingClipRetryCreatureID
+    pendingClipRetryTooltip, pendingClipRetryCreatureID = nil, nil
     if not tooltip or not tooltip:IsShown() then return end
-    local currentGuid, _, currentSecret = ResolveUnitDrop()
-    if currentSecret or currentGuid ~= guid then return end
+    if ResolveUnitDrop() ~= creatureID then return end
     ns.AddDropLines(tooltip, creatureID)
 end
 
 local function OnUnitTooltip(tooltip)
     if not ns.accountDB then return end
 
-    -- TEMPORARY diagnostic (remove once the hover-tooltip issue is fully
-    -- confirmed fixed) - safe to print unconditionally: tostring(guid)/
-    -- tostring(creatureID) are nil whenever `secret` is true.
-    local guid, creatureID, secret = ResolveUnitDrop()
-    ns.DebugPrint("tooltip debug: mouseoverExists=%s targetExists=%s hoveringOwnTarget=%s guid=%s creatureID=%s secret=%s",
-        tostring(UnitExists("mouseover")), tostring(UnitExists("target")), tostring(IsHoveringOwnTarget()),
-        tostring(guid), tostring(creatureID), tostring(secret))
-
-    if secret then
-        pendingSecretRetryTooltip = tooltip
-        C_Timer.After(0, RetryUnitTooltipSecret)
-        return
-    end
+    local creatureID = ResolveUnitDrop()
     if not creatureID then return end
 
     -- Deferred to the next frame tick so this runs after other tooltip
@@ -232,7 +192,7 @@ local function OnUnitTooltip(tooltip)
     -- resize the tooltip. Adding lines synchronously here can get them
     -- clipped if something else recalculates the tooltip's size right
     -- after this fires, since that resize happens after ours.
-    pendingClipRetryTooltip, pendingClipRetryGuid, pendingClipRetryCreatureID = tooltip, guid, creatureID
+    pendingClipRetryTooltip, pendingClipRetryCreatureID = tooltip, creatureID
     C_Timer.After(0, RetryUnitTooltipClip)
 end
 
