@@ -59,6 +59,22 @@ local function GetCreatureIDFromGUID(guid)
     return nil
 end
 
+-- UnitName can ALSO come back secret (confirmed in-game: Tooltip.lua hit
+-- the identical "attempt to compare ... a secret string value" reading a
+-- creature's name off already-rendered tooltip text, not even a direct
+-- Unit call) - and unlike a secret GUID (which only ever gets compared/
+-- split right where it's read), a name gets STORED (entry.name) and used
+-- much later wherever a creature's name is displayed/formatted
+-- (GetCreatureDisplayName, tooltips, the Source Database panel...) - so
+-- guarding only at the read site isn't enough on its own, but guarding
+-- HERE (before it's ever stored) stops a secret name from ever reaching
+-- any of those later, harder-to-predict call sites at all.
+local function SafeUnitName(unit)
+    local name = UnitName(unit)
+    if issecretvalue and issecretvalue(name) then return nil end
+    return name
+end
+
 -- A chest/crate/etc is a GameObject, not a Creature - it never has a
 -- "target" to die and get cached the way GetTargetCreature relies on, so
 -- its identity has to come from the loot itself. GetLootSourceInfo's GUID
@@ -291,7 +307,7 @@ local function TryCacheDeadTarget()
     if creatureID then
         lastDeadTarget.guid = guid
         lastDeadTarget.creatureID = creatureID
-        lastDeadTarget.name = UnitName("target")
+        lastDeadTarget.name = SafeUnitName("target")
         lastDeadTarget.time = GetTime()
     end
 end
@@ -663,7 +679,7 @@ local function ResolveLootCreature()
     if not name then
         local targetGuid = UnitGUID("target")
         if not (issecretvalue and issecretvalue(targetGuid)) and targetGuid == guid then
-            name = UnitName("target")
+            name = SafeUnitName("target")
         end
     end
     return guid, creatureID, name
@@ -806,7 +822,7 @@ frame:SetScript("OnEvent", function(self, event, msg, _, spellID)
     elseif event == "MERCHANT_SHOW" then
         local vendorID = GetCreatureIDFromGUID(UnitGUID("target"))
         if vendorID then
-            RecordVendorSells(vendorID, UnitName("target"))
+            RecordVendorSells(vendorID, SafeUnitName("target"))
             ns.DebugPrint("recorded %d item(s) for sale from %s.", GetMerchantNumItems(), ns.GetCreatureDisplayName(vendorID))
         end
     elseif event == "PLAYER_MONEY" then

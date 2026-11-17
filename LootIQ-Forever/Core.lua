@@ -489,11 +489,18 @@ SlashCmdList["LOOTIQ"] = function(rawMsg)
             print("|cff33ff99LootIQ|r: no target selected.")
             return
         end
+        -- UnitGUID/UnitName can both come back as "secret" opaque values
+        -- instead of real strings (confirmed in-game, several times, this
+        -- client withholds unit identity very broadly) - formatting one
+        -- directly throws, so every value printed here is guarded first.
         local guid = UnitGUID("target")
+        if issecretvalue and issecretvalue(guid) then guid = nil end
         local unitType, _, _, _, _, creatureID = strsplit("-", guid or "")
         creatureID = tonumber(creatureID)
+        local targetName = UnitName("target")
+        if issecretvalue and issecretvalue(targetName) then targetName = nil end
         print(("|cff33ff99LootIQ|r: target=%s guid=%s creatureID=%s"):format(
-            UnitName("target") or "?", tostring(guid), tostring(creatureID)))
+            targetName or "?", tostring(guid), tostring(creatureID)))
 
         local entry = creatureID and ns.accountDB.creatures[creatureID]
         if not entry then
