@@ -135,19 +135,34 @@ end
 -- rather than a frame like a nameplate/unitframe - the common case while
 -- checking out/fighting a creature) hands tooltip:GetUnit() an opaque
 -- secret token for that specific internal handle - confirmed NOT fixable
--- by retrying a frame later (tried that first; user reported drop lines
--- still never showed). Sidestepped entirely by not using GetUnit()'s
--- token at all: "mouseover" is the ordinary, always-public unit ID that's
--- worked the same way since Classic, set the instant the cursor is over
--- ANY unit (a frame/nameplate or a raw world model alike) - a completely
--- separate mechanism from whatever secret handle the World Cursor
--- tooltip's own internals use. This postcall only ever fires because
--- hovering just set up a unit tooltip in the first place, so "mouseover"
--- is always the right unit to check here. Kept the issecretvalue guard
--- (with a single next-frame retry) as a defensive fallback in case
--- "mouseover" itself is ever secret too, but that's not the normal case.
+-- by retrying a frame later. Tried reading "mouseover" directly instead
+-- (the ordinary, always-public unit ID set by hovering any unit) - user
+-- confirmed that ALSO shows nothing, even while the hovered creature was
+-- also their actual target, so "mouseover" itself appears to be withheld
+-- for identity reads on this client too, not just the tooltip's own
+-- internal token.
+--
+-- "target" is the one unit token this addon has confirmed DOES work for
+-- identity (Loot.lua's CacheDeadTarget reads it successfully, with an
+-- occasional secret-value retry) - so when the hovered unit IS the
+-- player's current target, prefer reading "target" instead of
+-- "mouseover". UnitIsUnit never reveals raw identity (just whether two
+-- tokens refer to the same unit), so it's safe to use for this check even
+-- when "mouseover" itself can't be read as a GUID. This only helps while
+-- hovering your own current target, not an arbitrary un-targeted
+-- creature - there may be no way to read identity off a merely-hovered,
+-- non-targeted unit on this client at all; "mouseover" still gets tried
+-- as a fallback in case that's wrong.
+local function IsHoveringOwnTarget()
+    if not (UnitExists("mouseover") and UnitExists("target")) then return false end
+    local same = UnitIsUnit("mouseover", "target")
+    if issecretvalue and issecretvalue(same) then return false end
+    return same
+end
+
 local function ResolveUnitDrop()
-    local guid = UnitGUID("mouseover")
+    local unit = IsHoveringOwnTarget() and "target" or "mouseover"
+    local guid = UnitGUID(unit)
     if not guid then return nil, nil, false end
     if issecretvalue and issecretvalue(guid) then return nil, nil, true end
     local unitType, _, _, _, _, creatureID = strsplit("-", guid)
