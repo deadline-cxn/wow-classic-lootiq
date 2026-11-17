@@ -255,19 +255,44 @@ local function RecordKill(guid, creatureID, name)
     ns.DebugPrint("%s killed - now %d kills tracked.", ns.GetCreatureDisplayName(creatureID), entry.kills)
 end
 
--- Call this as often as possible - including right before loot fires, via
--- UNIT_SPELLCAST_SUCCEEDED for "player" (which also fires for Skinning
--- succeeding) - so the cache reflects the corpse actually being acted on,
--- not a stale kill from other combat that happened in between.
-local function CacheDeadTarget()
+-- Returns "secret" specifically when UnitGUID("target") came back secret
+-- (see TryCacheDeadTarget's own comment) so CacheDeadTarget knows to retry;
+-- any other outcome (no dead target, or a dead target that's just not a
+-- Creature/Vehicle) is final for this call, nothing to retry.
+local function TryCacheDeadTarget()
     if not (UnitExists("target") and UnitIsDead("target")) then return end
     local guid = UnitGUID("target")
+    if issecretvalue and issecretvalue(guid) then return "secret" end
     local creatureID = GetCreatureIDFromGUID(guid)
     if creatureID then
         lastDeadTarget.guid = guid
         lastDeadTarget.creatureID = creatureID
         lastDeadTarget.name = UnitName("target")
         lastDeadTarget.time = GetTime()
+    end
+end
+
+-- Call this as often as possible - including right before loot fires, via
+-- UNIT_SPELLCAST_SUCCEEDED for "player" (which also fires for Skinning
+-- succeeding) - so the cache reflects the corpse actually being acted on,
+-- not a stale kill from other combat that happened in between.
+--
+-- UnitGUID("target") can come back as a secret opaque value instead of a
+-- real GUID when this runs on the call stack of some protected/secure
+-- action (e.g. TurnOrActionStop - confirmed in-game, common while turning/
+-- moving during combat, i.e. exactly when a kill is likely to happen) -
+-- see the earlier issecretvalue fix in GetCreatureIDFromGUID. Simply
+-- skipping that case (as the first fix did) stops the Lua error, but also
+-- means this specific kill's dead-target cache never gets written at all -
+-- which is what caused "couldn't identify the loot source" on a kill that
+-- very clearly just happened. That taint only lasts for the duration of
+-- the synchronous protected call still in progress, so retrying once via
+-- C_Timer.After(0, ...) - which runs from Blizzard's own clean update loop
+-- on the next frame, no longer nested inside that call - almost always
+-- gets the real GUID instead.
+local function CacheDeadTarget()
+    if TryCacheDeadTarget() == "secret" then
+        C_Timer.After(0, TryCacheDeadTarget)
     end
 end
 
