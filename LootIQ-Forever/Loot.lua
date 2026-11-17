@@ -89,6 +89,30 @@ local function GetLootObjectID()
     return nil
 end
 
+-- Same idea as GetLootObjectID above, but for an actual creature corpse -
+-- reads the loot window's own source GUID directly instead of relying on
+-- GetTargetCreature's separately-maintained "most recently killed target"
+-- cache, which only approximates via a trailing time window off the
+-- player's current "target" and can miss entirely (e.g. target changed,
+-- or UnitGUID("target") happened to read as a secret value right when the
+-- kill landed - see CacheDeadTarget's own comment). The loot window
+-- already knows exactly which creature it belongs to, with no guessing
+-- needed, so this is the reliable primary source for who a creature's
+-- loot window belongs to; GetTargetCreature is now only a fallback for
+-- when this can't resolve it (e.g. no loot window at all, as with
+-- CHAT_MSG_LOOT/PLAYER_MONEY) or for the player name, which the loot
+-- source GUID alone doesn't carry.
+local function GetLootSourceCreature()
+    for i = 1, GetNumLootItems() do
+        if LootSlotHasItem(i) then
+            local guid = GetLootSourceInfo(i)
+            if issecretvalue and issecretvalue(guid) then return nil end
+            return guid, GetCreatureIDFromGUID(guid)
+        end
+    end
+    return nil
+end
+
 -- A Clam Shell, lockbox, or similar openable bag item has no world GUID at
 -- all (it's not an entity - GetLootSourceInfo returns nothing useful for
 -- it), so there's nothing for GetLootObjectID above to key off. Instead,
@@ -691,11 +715,31 @@ local function OnLootOpened()
     end
     currentLootIsContainer = false
 
-    -- guid, creatureID and name are always returned together (or not at all).
-    local guid, creatureID, name = GetTargetCreature()
-    if not guid then
+    -- Prefer the loot window's own source GUID (reliable, no guessing) -
+    -- only fall back to the target-cache heuristic (which also supplies a
+    -- name directly) if that somehow can't resolve a creature (e.g. no
+    -- loot window open yet at all, which shouldn't normally happen here
+    -- since OnLootOpened only runs because one just did).
+    local guid, creatureID, name = GetLootSourceCreature()
+    if not creatureID then
+        guid, creatureID, name = GetTargetCreature()
+    end
+    if not creatureID then
         ns.DebugPrint("couldn't identify the loot source (no recent dead target) - items from this loot weren't recorded.")
         return
+    end
+
+    -- GetLootSourceCreature's GUID alone carries no name - if that's the
+    -- path that resolved it (name still nil), use "target"'s name when
+    -- it's still the same corpse (the common case). Otherwise falls back
+    -- to whatever name (if any) is already on file for this creature
+    -- (GetOrCreateCreature keeps the existing name when nil is passed, and
+    -- backfills from Questie's database if there's never been one at all).
+    if not name then
+        local targetGuid = UnitGUID("target")
+        if not (issecretvalue and issecretvalue(targetGuid)) and targetGuid == guid then
+            name = UnitName("target")
+        end
     end
 
     currentLootGuid = guid
