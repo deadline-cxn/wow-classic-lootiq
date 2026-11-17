@@ -296,50 +296,6 @@ local function TryCacheDeadTarget()
     end
 end
 
--- General-purpose "whatever's currently targeted" cache - unlike
--- lastDeadTarget (which only ever holds a target that's confirmed DEAD,
--- for the loot-attribution fallback window), this holds ANY targeted
--- Creature/Vehicle for as long as it stays targeted, dead or alive. Added
--- specifically so Tooltip.lua's unit-hover hook can show drop-rate info
--- without itself ever trying to read UnitGUID from inside a tooltip
--- callback at all - confirmed via extensive diagnostic testing that doing
--- so there always comes back secret, no matter the retry strategy,
--- seemingly for as long as the World Cursor system is actively tracking a
--- hover (not just for one synchronous call the way CacheDeadTarget's own
--- TurnOrActionStop-triggered secrecy is). PLAYER_TARGET_CHANGED firing is
--- a separate, ordinary event dispatch, unrelated to whether the mouse
--- happens to be hovering anything, and isn't subject to that same
--- restriction.
-local currentTargetCreature = { guid = nil, creatureID = nil, name = nil }
-
-local function TryCacheCurrentTargetCreature()
-    if not UnitExists("target") then
-        currentTargetCreature.guid, currentTargetCreature.creatureID, currentTargetCreature.name = nil, nil, nil
-        return
-    end
-    local guid = UnitGUID("target")
-    if issecretvalue and issecretvalue(guid) then
-        ns.DebugPrint("target-cache debug: UnitGUID(target) secret")
-        return "secret"
-    end
-    currentTargetCreature.guid = guid
-    currentTargetCreature.creatureID = GetCreatureIDFromGUID(guid)
-    currentTargetCreature.name = currentTargetCreature.creatureID and UnitName("target") or nil
-    ns.DebugPrint("target-cache debug: creatureID=%s name=%s", tostring(currentTargetCreature.creatureID), tostring(currentTargetCreature.name))
-end
-
-local function CacheCurrentTargetCreature()
-    if TryCacheCurrentTargetCreature() == "secret" then
-        C_Timer.After(0, TryCacheCurrentTargetCreature)
-    end
-end
-
--- Exposed for Tooltip.lua - see currentTargetCreature's own comment above
--- for why it reads this cache instead of ever calling UnitGUID itself.
-function ns.GetCurrentTargetCreatureID()
-    return currentTargetCreature.creatureID, currentTargetCreature.name
-end
-
 -- Call this as often as possible - including right before loot fires, via
 -- UNIT_SPELLCAST_SUCCEEDED for "player" (which also fires for Skinning
 -- succeeding) - so the cache reflects the corpse actually being acted on,
@@ -873,9 +829,6 @@ frame:SetScript("OnEvent", function(self, event, msg, _, spellID)
         end
     elseif event == "PLAYER_TARGET_CHANGED" or event == "UNIT_HEALTH" then
         CacheDeadTarget()
-        if event == "PLAYER_TARGET_CHANGED" then
-            CacheCurrentTargetCreature()
-        end
     elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
         if msg == "player" then
             CacheDeadTarget()

@@ -134,69 +134,64 @@ end
 -- The "World Cursor" tooltip (hovering a unit directly in the 3D world,
 -- rather than a frame like a nameplate/unitframe - the common case while
 -- checking out/fighting a creature) makes ANY attempt to read unit
--- identity from directly within this hook come back secret, permanently,
--- for as long as the hover is ongoing - confirmed through extensive
--- diagnostic testing: tooltip:GetUnit()'s own token, "mouseover" read
--- directly, "target" read directly, a same-tick attempt, a retry a full
--- frame later via C_Timer.After, and even a retry built as a pre-existing
--- named function (never a fresh closure, which can inherit taint at
--- creation) ALL came back secret every single time. This isn't a
--- transient one-call taint window like Loot.lua's CacheDeadTarget deals
--- with (that one's triggered by a specific, short-lived protected action,
--- TurnOrActionStop) - it behaves like the World Cursor system keeps
--- identity withheld for as long as it's actively tracking a hover, which
--- no in-hook retry can ever outlast.
+-- identity (UnitGUID, for any unit token - tooltip:GetUnit()'s own,
+-- "mouseover", even "target") come back secret, confirmed via extensive
+-- diagnostic testing across every retry strategy tried (same tick, next
+-- frame, a pre-existing named function instead of a fresh closure) -
+-- including reading UnitGUID("target") from Loot.lua's own
+-- PLAYER_TARGET_CHANGED handler (a completely separate code path,
+-- unrelated to hovering), which ALSO came back secret. There may be no
+-- addon-readable GUID path for live unit identity on this client at all
+-- right now.
 --
--- The fix: never try to read unit identity from inside this hook AT ALL.
--- Loot.lua already maintains ns.GetCurrentTargetCreatureID() - a cache of
--- whatever's currently targeted, kept current via the ordinary
--- PLAYER_TARGET_CHANGED event (a ONE-TIME event dispatch when you select
--- a target, unrelated to whether the mouse happens to be hovering
--- anything right now, and not subject to this same restriction - that's
--- the same mechanism CacheDeadTarget already relies on). IsHoveringTarget
--- below only needs a same-unit CHECK (UnitIsUnit, which never reveals raw
--- identity and isn't itself secret per the diagnostics), not a GUID read,
--- so it's safe from inside this hook. This only shows drop info while
--- hovering your OWN current target, not an arbitrary un-targeted
--- creature - there's no evidence of any working way to read identity off
--- a merely-hovered, non-targeted unit on this client at all.
-local function IsHoveringTarget()
-    if not (UnitExists("mouseover") and UnitExists("target")) then return false end
-    local same = UnitIsUnit("mouseover", "target")
-    if issecretvalue and issecretvalue(same) then return false end
-    return same
+-- Fix (per user's own suggestion): don't read identity at all - read the
+-- creature's NAME directly off the tooltip's own already-rendered text.
+-- Plain UI text isn't protected/secret data, it's exactly what the player
+-- already sees on screen, and ns.accountDB.creatures already stores each
+-- creature's last-known display name. GameTooltipTextLeft1 is the
+-- standard FontString region Blizzard's own tooltip uses for a unit's
+-- name line - reading `_G[frameName.."TextLeft1"]:GetText()` is a
+-- long-standing, widely-used addon technique for exactly this (no
+-- dedicated API exists to read a tooltip's own rendered lines back).
+-- Trades exact identity for name-matching: two different creatureIDs
+-- that happen to share a display name (a generic mob name reused across
+-- several distinct spawns/levels, not uncommon in WoW) would show
+-- whichever one FindCreatureIDByName finds first, merging their data in
+-- this display only - an acceptable approximation given there's no
+-- longer any identity signal more precise than the name to go on. This
+-- ALSO works for any hover now, not just your own current target (an
+-- actual improvement over the target-cache approach tried first) - the
+-- name is shown regardless of whether the creature is targeted.
+local function GetTooltipUnitName(tooltip)
+    local frameName = tooltip:GetName()
+    local textLeft1 = frameName and _G[frameName .. "TextLeft1"]
+    return textLeft1 and textLeft1:GetText()
 end
 
-local function ResolveUnitDrop()
-    if not IsHoveringTarget() then return nil end
-    return ns.GetCurrentTargetCreatureID()
-end
-
-local pendingClipRetryTooltip, pendingClipRetryCreatureID = nil, nil
-local function RetryUnitTooltipClip()
-    local tooltip, creatureID = pendingClipRetryTooltip, pendingClipRetryCreatureID
-    pendingClipRetryTooltip, pendingClipRetryCreatureID = nil, nil
-    if not tooltip or not tooltip:IsShown() then return end
-    if ResolveUnitDrop() ~= creatureID then return end
-    ns.AddDropLines(tooltip, creatureID)
+local function FindCreatureIDByName(name)
+    if not name then return nil end
+    for creatureID, entry in pairs(ns.accountDB.creatures) do
+        if entry.name == name then return creatureID end
+    end
+    return nil
 end
 
 local function OnUnitTooltip(tooltip)
     if not ns.accountDB then return end
 
-    local creatureID = ResolveUnitDrop()
-    local cachedID, cachedName = ns.GetCurrentTargetCreatureID()
-    ns.DebugPrint("tooltip debug: isHoveringTarget=%s cachedID=%s cachedName=%s resolvedCreatureID=%s",
-        tostring(IsHoveringTarget()), tostring(cachedID), tostring(cachedName), tostring(creatureID))
-    if not creatureID then return end
-
     -- Deferred to the next frame tick so this runs after other tooltip
     -- addons (e.g. TipTac) finish their own OnTooltipSetUnit pass and
-    -- resize the tooltip. Adding lines synchronously here can get them
-    -- clipped if something else recalculates the tooltip's size right
-    -- after this fires, since that resize happens after ours.
-    pendingClipRetryTooltip, pendingClipRetryCreatureID = tooltip, creatureID
-    C_Timer.After(0, RetryUnitTooltipClip)
+    -- resize the tooltip - also ensures the name text (set this same
+    -- frame by Blizzard's own tooltip rebuild) is definitely already
+    -- rendered by the time it's read. Adding lines synchronously here can
+    -- get them clipped if something else recalculates the tooltip's size
+    -- right after this fires.
+    C_Timer.After(0, function()
+        if not tooltip:IsShown() then return end
+        local creatureID = FindCreatureIDByName(GetTooltipUnitName(tooltip))
+        if not creatureID then return end
+        ns.AddDropLines(tooltip, creatureID)
+    end)
 end
 
 -- Same TooltipDataProcessor requirement as the item hook above - retail
