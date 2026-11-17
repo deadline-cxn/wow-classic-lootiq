@@ -186,14 +186,25 @@ local function OnUnitTooltip(tooltip)
 
     if secret then
         C_Timer.After(0, function()
-            if not tooltip:IsShown() then return end
+            if not tooltip:IsShown() then
+                ns.DebugPrint("tooltip debug (retry): tooltip no longer shown, bailing")
+                return
+            end
             local _, retryCreatureID, retrySecret = ResolveUnitDrop()
+            ns.DebugPrint("tooltip debug (retry): creatureID=%s secret=%s", tostring(retryCreatureID), tostring(retrySecret))
             if retrySecret or not retryCreatureID then return end
+            local entry = ns.accountDB.creatures[retryCreatureID]
+            ns.DebugPrint("tooltip debug (retry): entry=%s kills=%s", tostring(entry ~= nil), tostring(entry and entry.kills))
             ns.AddDropLines(tooltip, retryCreatureID)
         end)
         return
     end
     if not creatureID then return end
+
+    do
+        local entry = ns.accountDB.creatures[creatureID]
+        ns.DebugPrint("tooltip debug (non-secret path): entry=%s kills=%s", tostring(entry ~= nil), tostring(entry and entry.kills))
+    end
 
     -- Deferred to the next frame tick so this runs after other tooltip
     -- addons (e.g. TipTac) finish their own OnTooltipSetUnit pass and
